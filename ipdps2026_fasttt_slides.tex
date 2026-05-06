@@ -1,0 +1,338 @@
+\documentclass{beamer}
+
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{xspace}
+
+\graphicspath{{figs/}}
+
+\newcommand{\design}{\textit{FastTT}\xspace}
+\newcommand{\sxor}{Shift-XOR\xspace}
+\newcommand{\twotone}{Two-tone\xspace}
+
+\title{\design: Accelerating \sxor Erasure Coding for Data Storage}
+\author{Duo Sun \and Ximing Fu \and Qiang Wang}
+\institute{Harbin Institute of Technology (Shenzhen) \\ Pengcheng Laboratory}
+\date{IPDPS 2026}
+
+\begin{document}
+
+\begin{frame}
+  \titlepage
+\end{frame}
+
+\begin{frame}[t]{Motivation: Why This Problem Matters}
+\small
+\begin{itemize}
+  \item In distributed storage reliability, two mainstream choices are replication and erasure coding; erasure coding saves substantial storage, and RS codes have been widely deployed with strong theory and system optimizations.
+  \item Two-tone \sxor has excellent theoretical complexity: it uses shift/XOR computations instead of finite-field matrix multiplications.
+  \item But prior Two-tone studies mainly emphasize coding theory, with limited system-level optimization for memory access behavior.
+  \item RS-oriented optimization techniques cannot be directly transferred to \sxor codes because both computation principles and data-access patterns differ.
+  \item We therefore need a dedicated implementation methodology for Two-tone \sxor and practical validation in production-like systems such as Ceph.
+\end{itemize}
+
+\vspace{0.6em}
+\begin{block}{Talk Goal}
+Build system-level, memory-access-aware optimizations for \twotone \sxor and verify real performance gains in Ceph.
+\end{block}
+\end{frame}
+
+\begin{frame}[t]{Limitations of Existing Solutions (1/2)}
+\scriptsize
+\begin{columns}[T,totalwidth=\textwidth]
+  \column{0.44\textwidth}
+  \begin{itemize}
+    \item \textbf{Redundant Memory Access and Poor Temporal Locality:} Naive Two-tone encoding/decoding repeatedly updates parity locations without memory-friendly scheduling.
+    \item \textbf{Inefficient Data Traversal Pattern of Encoding:} Horizontal traversal has better data locality but repeated parity updates; vertical traversal reduces parity updates but increases data reloads.
+  \end{itemize}
+
+  \column{0.56\textwidth}
+  \centering
+  \includegraphics[width=\linewidth,height=0.56\textheight,keepaspectratio]{Example_of_Two-tone_Encoding.pdf}
+
+  \vspace{0.2em}
+  {\scriptsize Fig.1: Example of Two-tone encoding in the paper.}
+\end{columns}
+\end{frame}
+
+\begin{frame}[t]{Limitations of Existing Solutions (2/2)}
+\scriptsize
+\begin{columns}[T,totalwidth=\textwidth]
+  \column{0.43\textwidth}
+  \begin{itemize}
+    \item \textbf{Complex Decoding Process with Suboptimal Traversal Pattern}
+    \item Naive decoding treats data recovery and parity re-encoding as separate operators.
+    \item For mixed data/parity erasures, this causes repeated passes over overlapping memory regions.
+    \item This motivates operator fusion and case-aware traversal selection.
+  \end{itemize}
+
+  \vspace{0.4em}
+  \textbf{Takeaway:} the bottleneck is memory behavior in implementation, not the Two-tone coding theory itself.
+
+  \column{0.57\textwidth}
+  \centering
+  \includegraphics[width=\linewidth,height=0.56\textheight,keepaspectratio]{Example_of_Two-tone_Decoding.pdf}
+
+  \vspace{0.2em}
+  {\scriptsize Fig.2: Example of Two-tone decoding in the paper.}
+\end{columns}
+\end{frame}
+
+\begin{frame}[t]{FastTT Overview}
+\scriptsize
+\begin{columns}[T,totalwidth=\textwidth]
+  \column{0.44\textwidth}
+  \begin{block}{Core design principle}
+  Optimize \twotone with memory-access-aware system techniques, not just algorithmic structure.
+  \end{block}
+
+  \vspace{0.2em}
+  \begin{enumerate}
+    \item Cache-Friendly Window Partitioning
+    \item Neighbor-Merging Access
+    \item Erasure-Parity Mapping
+    \item Traversal Pattern Selection
+  \end{enumerate}
+
+  \vspace{0.2em}
+  \begin{itemize}
+    \item Reduce redundant memory traffic
+    \item Improve locality across encoding and decoding
+    \item Specialize the decoder for common erasure cases
+  \end{itemize}
+
+  \column{0.56\textwidth}
+  \centering
+  \includegraphics[width=\linewidth]{Two-tone_Optimization_Overview.pdf}
+
+  \vspace{0.2em}
+  {\scriptsize Overview of the FastTT workflow, adapted from the paper.}
+\end{columns}
+\end{frame}
+
+\begin{frame}[t]{Key Idea 1: Cache-Friendly Window Partitioning}
+\scriptsize
+\begin{columns}[T,totalwidth=\textwidth]
+  \column{0.43\textwidth}
+  \begin{itemize}
+    \item Treat each chunk with a windowed, tiling-style processing strategy.
+    \item Apply all \sxor updates inside one window before moving to the next window.
+    \item Do not initialize the whole chunk to zero in advance; write values directly during shift-XOR updates.
+    \item This removes one full initialization traversal and lowers memory-access overhead.
+  \end{itemize}
+
+  \vspace{0.4em}
+  \textbf{Effect:} simpler access scheduling and less unnecessary memory traffic.
+
+  \column{0.57\textwidth}
+  \centering
+  \includegraphics[width=\linewidth,height=0.54\textheight,keepaspectratio]{Cache-Friendly_Window_Demonstration.pdf}
+
+  \vspace{0.2em}
+  {\scriptsize Windowed processing plays a tiling-like role, improving locality without relying on hardware-specific cache sizing.}
+\end{columns}
+\end{frame}
+
+\begin{frame}[t]{Key Idea 2: Traversal Patterns and Neighbor-Merging Access}
+\scriptsize
+\begin{columns}[T,totalwidth=\textwidth]
+  \column{0.41\textwidth}
+  \begin{itemize}
+    \setlength{\itemsep}{0.35em}
+    \item Horizontal traversal ($\Theta((k+km)l)$): scans data chunk-by-chunk, giving strong local reads but many repeated parity writes.
+    \item Vertical traversal ($\Theta((m+km)l)$): writes each parity symbol once, but repeatedly reloads data from different chunks.
+    \item Neighbor-merging (FastTT, $\Theta\bigl((k+\tfrac{km}{2})l\bigr)$): XORs adjacent data contributions in SIMD registers before touching parity memory, cutting write traffic while preserving locality.
+  \end{itemize}
+
+  \vspace{0.3em}
+  \textbf{Design choice:} keep the horizontal-style access locality, but reduce parity-memory pressure with in-register merging.
+
+  \column{0.59\textwidth}
+  \centering
+  \begin{minipage}[t]{0.48\linewidth}
+    \centering
+    \includegraphics[width=\linewidth,height=0.145\textheight,keepaspectratio]{Two-tone_Horizontal_Access_Pattern.pdf}
+
+    {\tiny (a) Horizontal traversal}
+  \end{minipage}\hfill
+  \begin{minipage}[t]{0.48\linewidth}
+    \centering
+    \includegraphics[width=\linewidth,height=0.145\textheight,keepaspectratio]{Two-tone_Vertical_Access_Pattern.pdf}
+
+    {\tiny (b) Vertical traversal}
+  \end{minipage}
+
+  \vspace{0.45em}
+
+  \begin{minipage}[t]{0.96\linewidth}
+    \centering
+    \includegraphics[width=\linewidth,height=0.205\textheight,keepaspectratio]{Neighbor-Merging_Access_Pattern.pdf}
+
+    {\tiny (c) Neighbor-merging access in FastTT}
+  \end{minipage}
+\end{columns}
+\end{frame}
+
+\begin{frame}[t]{Key Idea 3: Erasure-Parity Mapping}
+\scriptsize
+\begin{columns}[T,totalwidth=\textwidth]
+  \column{0.42\textwidth}
+  \begin{itemize}
+    \item Traditional decoding often does two steps: recover erased data, then re-encode erased parity.
+    \item FastTT maps erased data and erased parity into one unified abstraction.
+    \item Decoded codewords are immediately reused to update erased parity inside the same elimination flow.
+    \item This removes a separate repair stage and avoids extra traversal.
+  \end{itemize}
+
+  \vspace{0.4em}
+  \textbf{Benefit:} fewer memory round-trips, no separate repair pass, and less redundant reading and writing.
+
+  \column{0.58\textwidth}
+  \centering
+  \includegraphics[width=\linewidth,height=0.54\textheight,keepaspectratio]{Erasure-Parity_Mapping_Decoding_Demonstration.pdf}
+
+  \vspace{0.2em}
+  {\scriptsize Dashed arrows and crossed-out steps show work eliminated by integrating parity recovery into decoding.}
+\end{columns}
+\end{frame}
+
+\begin{frame}[t]{Key Idea 4: Traversal Pattern Selection}
+\scriptsize
+\begin{columns}[T,totalwidth=\textwidth]
+  \column{0.42\textwidth}
+  \begin{itemize}
+    \item In real clusters, a single erased chunk is much more common than multi-chunk loss.
+    \item For that special case, running full \twotone elimination is unnecessary.
+    \item FastTT reuses the vertical pattern introduced earlier and selects it only for one-erasure recovery.
+    \item For all other cases, it falls back to the unified standard decoder rather than trying to optimize every pattern.
+  \end{itemize}
+
+  \vspace{0.4em}
+  \textbf{Result:} lower control overhead, a one-pass recovery path, and very large gains for single erasures.
+
+  \column{0.58\textwidth}
+  \centering
+  \includegraphics[width=\linewidth,height=0.54\textheight,keepaspectratio]{Vertical_Traversal_Pattern_Demonstration.pdf}
+
+  \vspace{0.2em}
+  {\scriptsize A missing chunk is reconstructed in one pass over survived chunks, without full two-tone elimination.}
+\end{columns}
+\end{frame}
+
+\begin{frame}[t]{Flagship Results: Industrial and Academic Baselines}
+\scriptsize
+\begin{columns}[T,totalwidth=\textwidth]
+  \column{0.5\textwidth}
+  {\scriptsize
+  \begin{block}{Industrial Baselines in Ceph}
+  \begin{itemize}
+    \item Platform: Intel i9-14900K, AVX2, 2 MB chunks.
+    \item Vs. ISA-L: \textbf{+59.1\%} avg. encode, \textbf{+50.9\%} avg. decode.
+    \item Vs. Jerasure: \textbf{+261.4\%} avg. encode, \textbf{+161.1\%} avg. decode.
+  \end{itemize}
+  \vspace{0.1em}
+  \resizebox{\linewidth}{!}{
+  \begin{tabular}{lrrrrrr}
+    \toprule
+    & \multicolumn{3}{c}{Encode} & \multicolumn{3}{c}{Avg. decode} \\
+    \cmidrule(lr){2-4} \cmidrule(lr){5-7}
+    Config & FastTT & ISA-L & Jera. & FastTT & ISA-L & Jera. \\
+    \midrule
+    $(6,2)$ & 34.74 & 24.37 & 17.03 & 60.80 & 31.64 & 29.48 \\
+    $(6,3)$ & 31.69 & 17.59 & 7.64 & 46.20 & 27.45 & 20.69 \\
+    $(8,3)$ & 31.35 & 17.03 & 7.08 & 46.91 & 24.85 & 17.67 \\
+    $(10,4)$ & 17.59 & 13.56 & 4.58 & 32.19 & 21.93 & 13.54 \\
+    \bottomrule
+  \end{tabular}}
+  \end{block}
+  }
+
+  \column{0.5\textwidth}
+  {\scriptsize
+  \begin{block}{Academic Baseline: Cerasure}
+  \begin{itemize}
+    \item Vs. Cerasure: \textbf{+13.2\%} avg. encode, \textbf{+16.0\%} avg. decode.
+    \item Peak decoding gain reaches \textbf{43.6\%}.
+    \item Same averaging rule over erasure counts $1..m$.
+  \end{itemize}
+  \vspace{0.1em}
+  \resizebox{\linewidth}{!}{
+  \begin{tabular}{lrrrr}
+    \toprule
+    & \multicolumn{2}{c}{Encode} & \multicolumn{2}{c}{Avg. decode} \\
+    \cmidrule(lr){2-3} \cmidrule(lr){4-5}
+    Config & FastTT & Cerasure & FastTT & Cerasure \\
+    \midrule
+    $(6,2)$ & 47.97 & 44.20 & 67.61 & 59.65 \\
+    $(6,3)$ & 32.01 & 30.97 & 49.39 & 44.82 \\
+    $(8,3)$ & 32.75 & 28.72 & 48.67 & 43.89 \\
+    $(10,4)$ & 24.58 & 19.36 & 37.28 & 33.36 \\
+    \bottomrule
+  \end{tabular}}
+  \end{block}
+  }
+\end{columns}
+\vspace{0.1em}
+{\tiny Avg. decode is averaged over erasure counts $1..m$ for both data-chunk and parity-chunk losses.}
+\end{frame}
+
+\begin{frame}[t]{Flagship Results: Ablation}
+\small
+{\scriptsize
+\textbf{Ablation on $(8,3)$ (GB/s)}
+\vspace{0.2em}
+
+\resizebox{\linewidth}{!}{
+\begin{tabular}{cccccc}
+  \toprule
+  CFWP & NMA & EPM & TPS & Encode & Decode \\
+  \midrule
+    &   &   &   & 13.16 & 7.54 \\
+    &   & \checkmark &   & 13.16 & 16.85 \\
+  \checkmark &   & \checkmark &   & 23.32 & 24.10 \\
+  \checkmark & \checkmark & \checkmark &   & 31.23 & 24.10 \\
+  \checkmark & \checkmark & \checkmark & \checkmark & 32.78 & 35.23 \\
+  \bottomrule
+\end{tabular}}
+}
+
+\vspace{0.8em}
+\begin{itemize}
+  \item Each optimization contributes a visible, additive benefit instead of one isolated jump.
+  \item EPM alone more than doubles decoding throughput, from 7.54 to 16.85 GB/s.
+  \item CFWP improves both encode and decode; NMA mainly boosts encode; TPS mainly boosts the dominant single-erasure cases and raises the overall average decode throughput.
+\end{itemize}
+\end{frame}
+
+\begin{frame}[t]{Summary and Future Research}
+\small
+\begin{block}{One-sentence summary}
+\design is the first high-performance systems implementation of \twotone \sxor coding, turning a theoretically efficient code family into a practical high-throughput storage primitive.
+\end{block}
+
+\vspace{0.5em}
+\textbf{What to remember}
+\begin{itemize}
+  \item The main bottleneck is memory behavior, not just arithmetic complexity.
+  \item Four lightweight but coordinated optimizations unlock large gains in both encoding and decoding.
+  \item The biggest wins come from improving locality and specializing the dominant single-erasure case.
+\end{itemize}
+
+\vspace{0.4em}
+\textbf{Open directions}
+\begin{itemize}
+  \item Adaptive or heterogeneous window sizing
+  \item More flexible SIMD-aware merging heuristics
+  \item Reusing the fast path for reducible multi-erasure patterns
+\end{itemize}
+\end{frame}
+
+\begin{frame}
+  \centering
+  \Large Thank you!\\[0.5em]
+  Questions?
+\end{frame}
+
+\end{document}

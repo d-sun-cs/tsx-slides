@@ -1,0 +1,40 @@
+# Speaker Notes for FastTT IPDPS 2026 Talk
+
+## Slide 1 - Title
+Good morning/afternoon everyone. I am presenting our work, FastTT: Accelerating Shift-XOR Erasure Coding for Data Storage. This talk is about how we turn the state-of-the-art Two-tone Shift-XOR code from a theoretically appealing idea into a practical high-performance implementation for storage systems.
+
+## Slide 2 - Motivation: Why This Problem Matters
+In distributed storage, reliability is usually provided by replication or erasure coding. Replication is simple, while erasure coding is much more storage-efficient. In practice, Reed-Solomon is already widely used and has strong theoretical and system-level optimizations, so our work is not about dismissing RS. Our focus is Two-tone Shift-XOR, which has excellent theoretical complexity because it replaces finite-field matrix multiplications with shifts and XORs. The gap is implementation: prior Two-tone work provides limited system-level optimization for memory access. RS-specific optimization tricks cannot be directly reused because the computation principles and data-access patterns are different. So our goal is to build Shift-XOR-specific implementation optimizations and validate them in Ceph.
+
+## Slide 3 - Limitations of Existing Solutions (1/2)
+This slide covers the first two limitations from the paper. First, Redundant Memory Access and Poor Temporal Locality: naive Two-tone encoding and decoding repeatedly touch parity memory without memory-friendly scheduling. Second, Inefficient Data Traversal Pattern of Encoding: horizontal traversal has better data locality but repeated parity updates, while vertical traversal reduces parity updates but increases data reloads. So the issue is not coding correctness, but memory-access trade-offs in implementation. Fig.1 provides the encoding context.
+
+## Slide 4 - Limitations of Existing Solutions (2/2)
+The third limitation is Complex Decoding Process with Suboptimal Traversal Pattern. Naive decoding often separates data recovery and parity re-encoding into two operators. For mixed data and parity erasures, this creates repeated passes over overlapping memory regions. This is exactly where operator fusion and case-aware traversal can help. Fig.2 shows the decoding context.
+
+## Slide 5 - FastTT Overview
+Our solution is FastTT, and the key design principle is to optimize Two-tone from a system perspective, especially memory access behavior. FastTT combines four techniques: cache-friendly window partitioning, neighbor-merging access, erasure-parity mapping, and traversal pattern selection. Together, these techniques reduce redundant memory traffic, improve locality, and adapt the decoder to common failure patterns. This is the core story of the talk.
+
+## Slide 6 - Key Idea 1: Cache-Friendly Window Partitioning
+The first idea is a windowed, tiling-style processing strategy. Instead of scanning an entire chunk at once, we work window by window and complete the shift-XOR updates inside one window before moving to the next. The important implementation detail is that we do not pre-initialize the whole chunk to zero. We simply write the values directly during shift-XOR updates, which removes one full traversal and reduces memory-access overhead. The main benefit is a simpler access schedule and less unnecessary memory traffic.
+
+## Slide 7 - Key Idea 2: Traversal Patterns and Neighbor-Merging Access
+Two-tone encoding trades between two main traversal patterns with distinct memory-access behaviors. Horizontal traversal ($\Theta((k+km)l)$) scans data chunk-by-chunk and updates parity symbols per-step: this yields very good local reads but causes many parity writes. Vertical traversal ($\Theta((m+km)l)$) gathers all data symbols needed for a parity symbol and writes once: it reduces parity writes but repeatedly reloads data. FastTT's neighbor-merging reduces extra memory traffic by combining adjacent contributions inside SIMD registers before writing parity, lowering the effective cost to $\Theta\bigl(k+\tfrac{km}{2}\bigr)l$ and improving performance on memory-bound platforms. This vertical pattern will come back later, because FastTT reuses it as a special fast path for single-erasure decoding.
+
+## Slide 8 - Key Idea 3: Erasure-Parity Mapping
+The third idea is to unify erased data and erased parity under one mapping abstraction. Traditionally, the decoder first reconstructs lost data and then runs a separate parity repair phase. FastTT removes that split. Instead, one decoding workflow handles both kinds of losses together, and decoded codewords are immediately reused to update erased parity inside the elimination process. So the key point is not that every case follows exactly the same path, but that we avoid writing results out and reading them back again for a separate repair pass. This cuts redundant memory traffic and makes the decoding workflow cleaner.
+
+## Slide 9 - Key Idea 4: Traversal Pattern Selection
+The fourth idea is based on a practical observation: in real storage systems, single-erasure recovery is much more common than complicated multi-erasure recovery. This is where the earlier vertical traversal pattern comes back. FastTT is not doing a fully general smart selection for every loss pattern. Instead, when exactly one chunk is erased, it explicitly chooses the vertical pattern and reconstructs the missing chunk with a direct one-pass XOR path. For all other cases, it falls back to the unified standard decoder. That narrower fast path is enough to cut control overhead and is a major reason why single-erasure decoding speed improves so dramatically.
+
+## Slide 10 - Flagship Results: Industrial and Academic Baselines
+Here I want to present the industrial and academic comparisons with equal weight. On the left is the comparison against the Ceph-integrated baselines, ISA-L and Jerasure, which reflects how FastTT compares with production-facing erasure coding choices. On the right is the comparison against Cerasure, which reflects the comparison with a recent academic state-of-the-art implementation. In all decoding tables here, the number is the average throughput over all erasure counts from 1 to $m$, including both lost data chunks and lost parity chunks. Against the Ceph baselines, FastTT improves average encoding throughput by 59.1 percent over ISA-L and 261.4 percent over Jerasure, while average decoding throughput improves by 50.9 percent and 161.1 percent respectively. Against Cerasure, FastTT still gains 13.2 percent on average in encoding and 16.0 percent on average in decoding, with a peak decoding gain of 43.6 percent.
+
+## Slide 11 - Flagship Results: Ablation
+This slide isolates why the gains happen. The speedup is not coming from one single trick. Erasure-Parity Mapping alone already pushes decoding throughput from 7.54 to 16.85 GB/s, so removing the separate parity repair pass matters a lot. Cache-Friendly Window Partitioning then improves both encoding and decoding. Neighbor-Merging Access mainly lifts encoding, while Traversal Pattern Selection mainly helps the dominant single-erasure cases and therefore raises the final average decoding throughput as well. So the final result is really the accumulation of several memory-access-aware optimizations.
+
+## Slide 12 - Summary and Future Research
+To summarize in one sentence, FastTT is the first high-performance systems implementation of Two-tone Shift-XOR coding. The key lesson is that the bottleneck is memory behavior, so memory-access-aware optimization is what unlocks the real performance potential of Shift-XOR codes. Looking forward, there are several promising directions: adaptive window sizing, more flexible SIMD-aware merging heuristics, and extending the fast path to reducible multi-erasure patterns. We hope this work makes Shift-XOR coding a more practical option for real storage systems.
+
+## Slide 13 - Q&A
+Thank you for listening. I would be happy to discuss the implementation details, the comparison with Reed-Solomon based libraries, or the implications for production storage deployments.
