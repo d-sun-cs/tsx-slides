@@ -4,7 +4,7 @@
 *.blg
 *.log
 *.out
-*.pdf
+# *.pdf
 *.synctex.gz
 *.toc
 *.nav
