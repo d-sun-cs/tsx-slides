@@ -59,6 +59,16 @@
 \setbeamertemplate{note page}[threelevel]
 \makeatother
 
+% Show "current / total" page number in bottom-right; hide navigation icons
+\setbeamertemplate{navigation symbols}{}
+\setbeamertemplate{footline}{%
+  \hbox{%
+    \begin{beamercolorbox}[wd=\paperwidth,ht=2.25ex,dp=1ex,right]{}%
+      \usebeamerfont{footline}\color{gray}\insertframenumber\,/\,\inserttotalframenumber\hspace*{2.5ex}%
+    \end{beamercolorbox}%
+  }%
+}
+
 \newcommand{\design}{\textit{FastTT}\xspace}
 \newcommand{\sxor}{Shift-XOR\xspace}
 \newcommand{\twotone}{Two-tone\xspace}
@@ -75,7 +85,7 @@
 % =====================================================================
 % Title
 % =====================================================================
-\begin{frame}
+\begin{frame}[plain]
   \titlepage
 \end{frame}
 \note{
@@ -114,134 +124,59 @@ Erasure coding delivers reliability at much lower storage cost than replication.
 % =====================================================================
 % Background: Two-tone at a glance
 % =====================================================================
-\subsection{Two-tone at a Glance}
-
-\begin{frame}[t]{\twotone \sxor in One Slide}
-\footnotesize
-\begin{columns}[T,totalwidth=\textwidth]
-  \column{0.5\textwidth}
-  \centering
-  \includegraphics[width=\linewidth,height=0.58\textheight,keepaspectratio]{Example_of_Two-tone_Encoding.pdf}
-
-  \vspace{0.3em}
-  {\scriptsize \textbf{Encoding:} each parity = XOR of shifted data chunks.}
-
-  \column{0.5\textwidth}
-  \centering
-  \includegraphics[width=\linewidth,height=0.58\textheight,keepaspectratio]{Example_of_Two-tone_Decoding.pdf}
-
-  \vspace{0.3em}
-  {\scriptsize \textbf{Decoding:} substitution $\to$ \twotone elimination $\to$ repair.}
-\end{columns}
-
-\vspace{0.4em}
-\centering
-\begin{minipage}{0.9\linewidth}
-\centering
-\footnotesize
-\textbf{Encode:} shift each data chunk by a fixed offset, then XOR them into each parity chunk.\\[0.15em]
-\textbf{Decode:} substitute survived data into parities, solve the erased data symbols one by one, then re-encode erased parities.
-\end{minipage}
-\end{frame}
-\note{
-Here is Two-tone in one slide. The coding algorithm and its successive-solvability property were established in prior work, and our contribution is on the systems side. To encode, we split the data into $k$ chunks and produce $m$ parity chunks by XORing shifted versions of the data, with no finite-field multiplications anywhere. To decode, we first substitute the survived data into the survived parities, then run Two-tone elimination to solve the erased symbols one by one, and finally re-encode any erased parity chunks. The decoding order is predetermined by the code structure, so it is not searched at runtime. Now let us see why a direct implementation of this is still not fast enough.
-}
-
 % =====================================================================
 % Limitations of existing solutions
 % =====================================================================
 \section{Limitations of Existing Solutions}
-\subsection{Encoding: Memory Access \& Traversal Trade-off}
+\subsection{Encoding \& Decoding Bottlenecks}
 
-\begin{frame}[t]{Limitations (1/2): Encoding is Memory-Bound}
-\footnotesize
+\begin{frame}[t]{Limitations of Existing Solutions}
+\scriptsize
 \begin{columns}[T,totalwidth=\textwidth]
+  % --- Left: Encoding & Decoding (merged) ---
   \column{0.42\textwidth}
+  \textbf{Encoding \& Decoding}
   \begin{itemize}
-    \setlength{\itemsep}{0.5em}
-    \item \textbf{Redundant memory access \& poor temporal locality}
-    \begin{itemize}
-      \setlength{\itemsep}{0.2em}
-      \item Each parity chunk fully scanned \emph{many} times.
-      \item Parity reads \& writes repeat per data chunk.
-    \end{itemize}
-    \item \textbf{Both traversal patterns are suboptimal}
-    \begin{itemize}
-      \setlength{\itemsep}{0.2em}
-      \item \emph{Horizontal:} extra parity writes.
-      \item \emph{Vertical:} extra data reloads.
-    \end{itemize}
+    \setlength{\itemsep}{0.25em}
+    \item Algorithm \& correctness established in prior work --- briefly recalled here.
+    \item Two traversal patterns of the data-parity grid: \emph{horizontal} (default direct implementation) and \emph{vertical}.
+    \item \textbf{Decoding:} generic 3-stage flow --- Substitution $\to$ \twotone Elimination $\to$ Repair (see fig.~(c)).
   \end{itemize}
 
-  \vspace{0.4em}
-  \begin{block}{Bottleneck}
-  \small Memory behavior, \emph{not} coding arithmetic.
-  \end{block}
-
+  % --- Right: traversal patterns + decoding example side-by-side ---
   \column{0.58\textwidth}
-  \centering
-  \includegraphics[width=0.95\linewidth,height=0.3\textheight,keepaspectratio]{Two-tone_Horizontal_Access_Pattern.pdf}
+  \begin{minipage}[t]{0.32\linewidth}
+    \vspace*{0pt}\centering
+    \includegraphics[width=\linewidth,height=0.18\textheight,keepaspectratio]{Two-tone_Horizontal_Access_Pattern.pdf}\\[-0.2em]
+    {\tiny (a) Horizontal traversal} \\[-0.3em]
+    {\tiny \emph{(default encoding)}}
 
-  {\tiny (a) Horizontal: per-data-symbol; writes scatter across parity. \;$\Theta((k{+}km)l)$}
-
-  \vspace{0.4em}
-
-  \includegraphics[width=0.95\linewidth,height=0.3\textheight,keepaspectratio]{Two-tone_Vertical_Access_Pattern.pdf}
-
-  {\tiny (b) Vertical: per-parity-symbol; re-reads data chunks. \;$\Theta((m{+}km)l)$}
+    \vspace{0.2em}
+    \includegraphics[width=\linewidth,height=0.18\textheight,keepaspectratio]{Two-tone_Vertical_Access_Pattern.pdf}\\[-0.2em]
+    {\tiny (b) Vertical traversal}
+  \end{minipage}\hfill
+  \begin{minipage}[t]{0.66\linewidth}
+    \vspace*{0pt}\centering
+    \includegraphics[width=\linewidth,height=0.43\textheight,keepaspectratio]{Example_of_Two-tone_Decoding.pdf}\\[-0.2em]
+    {\tiny (c) \twotone decoding example: $d_1,d_2,c_2$ erased} \\[-0.3em]
+    {\tiny Substitution $\to$ Elimination $\to$ Repair}
+  \end{minipage}
 \end{columns}
-\end{frame}
-\note{
-Two encoding bottlenecks. First, redundant memory access: the naive implementation scans each data chunk and performs a full pass over every parity chunk, so each parity is read and written $k$ times. The cost is repeated memory traffic, not the XOR itself. Second, both traversal patterns are suboptimal. Horizontal has good data-read locality but inflates parity writes. Vertical writes each parity symbol once but repeatedly reloads data across $k$ chunks. Both give traffic on the order of $k \cdot m \cdot l$. The bottleneck is memory behavior, not coding arithmetic.
-}
 
-\subsection{Decoding: Complexity \& Uniform Traversal}
-
-\begin{frame}[t]{Limitations (2/2): Complex Decoding Flow}
-\footnotesize
-\begin{itemize}
-  \setlength{\itemsep}{0.5em}
-  \item Naive decoding treats erased \textbf{data} and erased \textbf{parity} as two independent stages:
-\end{itemize}
-
-\vspace{0.4em}
+\vspace{0.05em}
 \centering
-\scalebox{0.95}{%
-\begin{tabular}{@{}c@{\;$\to$\;}c@{\;$\to$\;}c@{}}
-  \fbox{\parbox{3.2cm}{\centering\scriptsize Substitute survived \\ data into parities}} &
-  \fbox{\parbox{3.2cm}{\centering\scriptsize \twotone Elimination \\ \footnotesize\emph{recover erased data}}} &
-  \fbox{\parbox{3.6cm}{\centering\scriptsize \textbf{Separate} re-encode \\ \footnotesize\emph{repair erased parity}}}
-\end{tabular}}
-
-\vspace{0.9em}
-\raggedright
-\begin{columns}[T,totalwidth=\textwidth]
-  \column{0.52\textwidth}
-  \textbf{Problems}
-  \begin{itemize}
-    \setlength{\itemsep}{0.35em}
-    \item When data \emph{and} parity are both erased, the repair stage re-scans overlapping memory.
-    \item The same decoder is used for every erasure pattern --- no specialization for the common \textbf{single-erasure} case.
-  \end{itemize}
-
-  \column{0.48\textwidth}
-  \begin{block}{Running example}
-  \small $(k,m)=(4,3)$. \\
-  Erased: $\boldsymbol{d}_1,\boldsymbol{d}_2$ (data) $+$ $\boldsymbol{c}_2$ (parity). \\
-  Naive flow repairs $\boldsymbol{c}_2$ in a dedicated 3rd pass.
-  \end{block}
-
-  \vspace{0.3em}
-  \textbf{Opportunities}
-  \begin{itemize}
-    \setlength{\itemsep}{0.15em}
-    \item Fuse data recovery \& parity repair.
-    \item Fast path for single-erasure.
-  \end{itemize}
-\end{columns}
+\begin{minipage}{0.96\linewidth}
+\begin{block}{Bottleneck $=$ memory access, not arithmetic}
+\vspace{-0.4em}
+\scriptsize
+\textbf{Both encoding \& decoding:} poor locality, repeated access of the same chunks. \\
+\textbf{Decoding extra:} recovering lost \emph{data} and re-encoding lost \emph{parity} revisit overlapping memory.
+\vspace{-0.3em}
+\end{block}
+\end{minipage}
 \end{frame}
 \note{
-The decoding side has two problems. First, naive Two-tone separates data recovery from parity repair. In the (4,3) example with $d_1$, $d_2$, and $c_2$ lost, the repair of $c_2$ is a dedicated third pass that re-reads all data chunks, creating redundant memory traffic. Second, the same decoder is applied to every erasure pattern, with no specialization for the common single-erasure case. These two observations motivate EPM and TPS.
+The Two-tone encoding and decoding algorithms, together with their correctness, were established in prior work, so I will skip the math and focus on the implementation gap. For encoding, horizontal traversal of the data-parity grid is the default direct implementation, with vertical as the alternative. Decoding follows a generic three-stage flow --- substitute survived data, run Two-tone elimination, then repair the lost parity --- illustrated on the right with $d_1$, $d_2$ and $c_2$ erased. The bottleneck is the same on both sides: poor locality and repeated access over the same chunks. Decoding pays an extra cost: solving for lost data and re-encoding lost parity are separate passes that revisit overlapping memory. The root cause is memory access behavior, not coding arithmetic.
 }
 
 % =====================================================================
@@ -270,7 +205,7 @@ The decoding side has two problems. First, naive Two-tone separates data recover
 
   \vspace{0.3em}
   \textit{Encoding:} CFWP $+$ NMA. \\
-  \textit{Decoding:} CFWP $+$ EPM $+$ TPS.
+  \textit{Decoding:} CFWP $+$ NMA $+$ EPM $+$ TPS.
 
   \column{0.58\textwidth}
   \centering
@@ -281,7 +216,7 @@ The decoding side has two problems. First, naive Two-tone separates data recover
 \end{columns}
 \end{frame}
 \note{
-FastTT's design principle: optimize Two-tone by attacking memory-access behavior, not by changing the code construction. Four coordinated techniques: CFWP and NMA on the encoding side, EPM and TPS on the decoding side. The next four slides walk through each one.
+FastTT follows one design principle. Instead of rewriting the Two-tone code construction, we optimize its memory-access behavior. Four coordinated techniques deliver this. Encoding uses Cache-Friendly Window Partitioning together with Neighbor-Merging Access to keep the working set in cache and cut redundant parity writes. Decoding reuses the same two and adds Erasure-Parity Mapping, which fuses data recovery with parity re-encoding into a single pass, and Traversal Pattern Selection, which picks the best access order for the erasure pattern at hand. The next four slides walk through these techniques one by one.
 }
 
 \subsection{Cache-Friendly Window Partitioning}
@@ -293,9 +228,8 @@ FastTT's design principle: optimize Two-tone by attacking memory-access behavior
   \begin{itemize}
     \setlength{\itemsep}{0.45em}
     \item Tile each chunk into \textbf{cache-sized windows}.
-    \item Finish all \sxor updates in one window before the next.
+    \item Finish all \sxor updates in one window before moving on.
     \item \textbf{On-demand init} -- no full zero pass up front.
-    \item Window size $W$: smallest power of two $\ge k{-}1$.
   \end{itemize}
 
   \vspace{0.4em}
@@ -306,14 +240,14 @@ FastTT's design principle: optimize Two-tone by attacking memory-access behavior
 
   \column{0.58\textwidth}
   \centering
-  \includegraphics[width=\linewidth,height=0.68\textheight,keepaspectratio]{Cache-Friendly_Window_Demonstration.pdf}
+  \includegraphics[width=\linewidth,height=0.65\textheight,keepaspectratio]{Cache-Friendly_Window_Demonstration.pdf}
 
   \vspace{0.1em}
-  {\scriptsize $(k,m)=(4,3)$: $W \ge k{-}1=3 \Rightarrow W=4$ symbols. \\ Each chunk tiled into 4-symbol windows; all 3 parity updates complete within one window before advancing. Colored segments show local access.}
+  {\scriptsize Each chunk is tiled into windows; all parity updates inside a window finish before advancing. Colored segments show local access.}
 \end{columns}
 \end{frame}
 \note{
-Throughout the key ideas I will use the (4,3) code as a running example, matching the figures. For CFWP: the minimum window size is $k-1=3$, rounded up to the next power of two gives $W=4$ symbols. Each chunk is tiled into 4-symbol windows, and all 3 parity updates for a window complete before moving to the next. The working set stays small and fits in cache. On-demand initialization removes one full zero-pass over the chunk. This benefits both encoding and decoding.
+Throughout the key ideas I will use the (4,3) code as a running example, matching the figures. The idea of Cache-Friendly Window Partitioning is to tile each chunk into windows that fit in cache, and finish all Shift-XOR updates inside a window before moving to the next. The working set stays small and fits in cache. On-demand initialization also removes one full zero-pass over the chunk. This benefits both encoding and decoding.
 }
 
 \subsection{Neighbor-Merging Access}
@@ -321,50 +255,42 @@ Throughout the key ideas I will use the (4,3) code as a running example, matchin
 \begin{frame}[t]{Key Idea 2 -- Neighbor-Merging Access}
 \footnotesize
 \begin{columns}[T,totalwidth=\textwidth]
-  \column{0.40\textwidth}
+  \column{0.36\textwidth}
   \begin{itemize}
-    \setlength{\itemsep}{0.45em}
+    \setlength{\itemsep}{0.5em}
     \item XOR \textbf{two adjacent} data symbols in SIMD registers \emph{first}.
     \item Then write the merged result to parity \emph{once}.
     \item Keeps horizontal-style read locality; halves parity writes.
   \end{itemize}
 
-  \vspace{0.3em}
-  {\scriptsize
-  \begin{tabular}{@{}ll@{}}
-    Horizontal & $\Theta((k{+}km)l)$ \\
-    Vertical   & $\Theta((m{+}km)l)$ \\
-    \textbf{Neighbor-Merging} & $\Theta\!\bigl((k{+}\tfrac{km}{2})l\bigr)$ \\
-  \end{tabular}}
-
-  \vspace{0.3em}
+  \vspace{0.5em}
   \begin{block}{Effect}
-  \small Strictly better than horizontal; better than vertical when $m(k{+}2)>2k$.
+  \small Fewer redundant accesses than \emph{both} horizontal and vertical traversals in practice.
   \end{block}
 
-  \column{0.60\textwidth}
+  \column{0.64\textwidth}
   \centering
   \begin{minipage}[t]{0.48\linewidth}
-    \centering
-    \includegraphics[width=\linewidth,height=0.19\textheight,keepaspectratio]{Two-tone_Horizontal_Access_Pattern.pdf}\\
+    \vspace*{0pt}\centering
+    \includegraphics[width=\linewidth,height=0.26\textheight,keepaspectratio]{Two-tone_Horizontal_Access_Pattern.pdf}\\
     {\tiny (a) Horizontal}
   \end{minipage}\hfill
   \begin{minipage}[t]{0.48\linewidth}
-    \centering
-    \includegraphics[width=\linewidth,height=0.19\textheight,keepaspectratio]{Two-tone_Vertical_Access_Pattern.pdf}\\
+    \vspace*{0pt}\centering
+    \includegraphics[width=\linewidth,height=0.26\textheight,keepaspectratio]{Two-tone_Vertical_Access_Pattern.pdf}\\
     {\tiny (b) Vertical}
   \end{minipage}
 
   \vspace{0.5em}
   \begin{minipage}[t]{0.98\linewidth}
-    \centering
-    \includegraphics[width=\linewidth,height=0.32\textheight,keepaspectratio]{Neighbor-Merging_Access_Pattern.pdf}\\
-    {\scriptsize (c) \textbf{Neighbor-Merging}. $(k,m)=(4,3)$: $d_1 \oplus d_2$ merged in register, written once to $c_2[x]$. Parity writes: $4 \to 2$ per position.}
+    \vspace*{0pt}\centering
+    \includegraphics[width=\linewidth,height=0.42\textheight,keepaspectratio]{Neighbor-Merging_Access_Pattern.pdf}\\
+    {\scriptsize (c) \textbf{Neighbor-Merging.} Adjacent data symbols are XORed in register, then written once. Parity writes: $4 \to 2$ per position.}
   \end{minipage}
 \end{columns}
 \end{frame}
 \note{
-In the (4,3) code, $c_2$ has offset 0 for all data chunks, so $d_1$ and $d_2$ both contribute to $c_2[x]$ without any shift. Instead of writing to $c_2$ twice, we XOR $d_1[x]$ and $d_2[x]$ together in a SIMD register and write once. Parity writes drop from 4 to 2 per symbol position. The complexity table on the slide shows that neighbor-merging at $\Theta((k+km/2)l)$ is strictly better than horizontal and, in typical configurations, also better than vertical. We limit merging to pairs because AVX2 has a finite register budget and merging more chunks complicates offset alignment.
+In the example, two adjacent data chunks share the same offset to a particular parity, so each contributes to that parity slot without any shift. Instead of writing to that parity slot twice, we XOR the two data symbols together inside a SIMD register first and then write the merged result once. This halves the parity writes for those positions while keeping the read pattern localized like the horizontal traversal. As a result, Neighbor-Merging incurs fewer redundant memory accesses than both the horizontal and the vertical traversals in practice.
 }
 
 \subsection{Erasure-Parity Mapping}
@@ -585,7 +511,7 @@ FastTT is the first high-performance systems implementation of Two-tone Shift-XO
 
 \subsection{Thanks}
 
-\begin{frame}
+\begin{frame}[plain]
   \centering
   \vfill
   {\Huge Thank you!}\\[1.2em]

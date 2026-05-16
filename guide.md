@@ -1,3 +1,26 @@
+# IPDPS’26 Presentation Guidelines for Authors
+
+Presentation time:
+
+● 15 minutes in-person presentation + 5 minutes for questions and next-speaker set-up
+● Out of respect for attendees and other presenters, time limits will be strictly enforced.
+
+Projectors and Audio/Visual support people will be available in every room.
+
+Presentation tips for 15-minute talks:
+ 
+● Goal: Interest people in your work so that they talk to you or read your paper afterward
+● Focus on your key results - the most novel and important results
+● Present your most important information first (in case you run out of time)
+● Use large, clear fonts
+● Avoid over-crowded slides and too many details
+● Twelve slides with technical content is probably the maximum number feasible
+(8-10 is more realistic)
+
+
+
+---
+
 # Outline
 
 Motivation (1 slide)– clearly, articulate the motivation behind the specific problem you are solving and the significance if the approach is successful.
